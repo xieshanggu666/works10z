@@ -1,7 +1,8 @@
 <script setup>
 import { ref, computed, onMounted, watch } from 'vue'
 import { db } from '@/db'
-import { makeToken, formatDate } from '@/utils/format'
+import { uid, makeToken, formatDate, formatFull } from '@/utils/format'
+import { shareState, SHARE_STATE } from '@/utils/permission'
 import { useAuthStore } from '@/stores/auth'
 
 const props = defineProps({ open: Boolean, doc: Object })
@@ -10,7 +11,14 @@ const auth = useAuthStore()
 
 const shares = ref([])
 const perm = ref('view')
-const baseOrigin = typeof location !== 'undefined' ? location.origin + location.pathname + '#/share/' : '#/share/'
+const expireDays = ref(0) // 0 = 永久有效
+const shareBase = typeof location !== 'undefined' ? location.origin + location.pathname + '#/share/' : '#/share/'
+const docBase = typeof location !== 'undefined' ? location.origin + location.pathname + '#/docs/' : '#/docs/'
+
+const userById = computed(() => Object.fromEntries(auth.users.map((u) => [u.id, u])))
+
+// 当前页面链接指向文档详情页（#/docs/:id），而非共享令牌链接
+const currentUrl = computed(() => docBase + (props.doc?.id || ''))
 
 async function load() {
   if (!props.doc) return
@@ -19,26 +27,41 @@ async function load() {
 }
 
 async function create() {
-  const s = { id: 'nodelete-share-' + Date.now().toString(36), docId: props.doc.id, token: makeToken(), permission: perm.value, createdBy: auth.user?.id, expiresAt: null }
+  const now = Date.now()
+  const s = {
+    id: uid('sh'),
+    docId: props.doc.id,
+    token: makeToken(),
+    permission: perm.value,
+    createdBy: auth.user?.id,
+    createdAt: new Date(now).toISOString(),
+    expiresAt: expireDays.value ? new Date(now + expireDays.value * 86400000).toISOString() : null,
+    revokedAt: null
+  }
   await db.shares.add(s)
   shares.value.unshift(s)
 }
 
-async function revoke(id) {
-  await db.shares.delete(id)
-  shares.value = shares.value.filter((s) => s.id !== id)
+// 撤销 = 标记 revokedAt（软撤销），链接状态与文档访问权限同步失效
+async function revoke(s) {
+  const revokedAt = new Date().toISOString()
+  await db.shares.update(s.id, { revokedAt })
+  s.revokedAt = revokedAt
 }
 
-function copyLink(token) {
-  const url = baseOrigin + token
-  navigator.clipboard?.writeText(url).then(() => alert('链接已复制。'))
+function stateOf(s) { return shareState(s) }
+function stateLabel(s) {
+  return { [SHARE_STATE.ACTIVE]: '有效', [SHARE_STATE.REVOKED]: '已撤销', [SHARE_STATE.EXPIRED]: '已过期' }[stateOf(s)] || '无效'
+}
+function expireText(s) {
+  return s.expiresAt ? '有效期至 ' + formatFull(s.expiresAt) : '永久有效'
 }
 
-async function copyCurrent() {
-  await copyLink(props.doc.id)
+function copy(text) {
+  navigator.clipboard?.writeText(text).then(() => alert('链接已复制。'))
 }
-
-const currentUrl = computed(() => baseOrigin + (props.doc?.id || ''))
+function copyLink(s) { copy(shareBase + s.token) }
+function copyCurrent() { copy(currentUrl.value) }
 
 function onRootClick() { emit('close') }
 function stop(e) { e.stopPropagation() }
@@ -71,16 +94,25 @@ watch(() => props.open, (v) => { if (v && props.doc) load() })
               <option value="view">仅查看</option>
               <option value="edit">可编辑</option>
             </select>
+            <select v-model.number="expireDays" class="perm">
+              <option :value="0">永久有效</option>
+              <option :value="1">1 天后过期</option>
+              <option :value="7">7 天后过期</option>
+              <option :value="30">30 天后过期</option>
+            </select>
             <button class="btn primary sm" @click="create">生成链接</button>
           </div>
           <div v-if="shares.length" class="share-list">
-            <div v-for="s in shares" :key="s.id" class="share-item">
+            <div v-for="s in shares" :key="s.id" class="share-item" :class="{ off: stateOf(s) !== 'active' }">
               <div class="share-info">
-                <div class="surl"><code>{{ baseOrigin }}{{ s.token }}</code></div>
-                <div class="smeta">{{ s.permission === 'edit' ? '可编辑' : '仅查看' }} · 由 {{ s.createdBy }} 创建 · {{ formatDate(s.createdAt) }}</div>
+                <div class="surl"><code>{{ shareBase }}{{ s.token }}</code></div>
+                <div class="smeta">
+                  <span class="state" :class="stateOf(s)">{{ stateLabel(s) }}</span>
+                  {{ s.permission === 'edit' ? '可编辑' : '仅查看' }} · 由 {{ userById[s.createdBy]?.name || s.createdBy || '未知' }} 创建于 {{ formatDate(s.createdAt) }} · {{ expireText(s) }}
+                </div>
               </div>
-              <button class="btn sm" @click="copyLink(s.token)">复制</button>
-              <button class="btn sm danger" @click="revoke(s.id)">撤销</button>
+              <button class="btn sm" :disabled="stateOf(s) !== 'active'" @click="copyLink(s)">复制</button>
+              <button v-if="stateOf(s) === 'active'" class="btn sm danger" @click="revoke(s)">撤销</button>
             </div>
           </div>
           <div v-else class="hint">尚未生成共享链接</div>
@@ -105,8 +137,13 @@ watch(() => props.open, (v) => { if (v && props.doc) load() })
 .perm { border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; font-size: 13px; }
 .share-list { margin-top: 10px; display: flex; flex-direction: column; gap: 8px; }
 .share-item { border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; display: flex; align-items: center; gap: 10px; }
+.share-item.off { opacity: 0.6; }
 .share-info { flex: 1; min-width: 0; }
 .surl { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .surl code { font-size: 12px; }
 .smeta { color: var(--text-3); font-size: 11px; margin-top: 2px; }
+.state { font-weight: 600; margin-right: 4px; }
+.state.active { color: var(--accent); }
+.state.revoked { color: var(--danger); }
+.state.expired { color: var(--warn); }
 </style>
