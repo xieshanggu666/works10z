@@ -1,4 +1,6 @@
 // 权限工具：基于角色与文档可见性
+import { isShareActive } from './share'
+
 export const ROLE = { ADMIN: 'admin', EDITOR: 'editor', VIEWER: 'viewer' }
 
 // 可新增/编辑/删除的（内容治理）
@@ -15,18 +17,18 @@ export function canEditDoc(role, doc, userId) {
   return false
 }
 
-// 是否可查看某文档（可见性 + 拥有者 + 协作成员）
-export function canViewDoc(doc, userId, sharedPermission) {
+// 是否可查看某文档（可见性 + 拥有者 + 协作成员 + 有效共享链接）
+export function canViewDoc(doc, userId, share) {
   if (!doc) return false
   if (doc.visibility === 'public') return true
   if (doc.visibility === 'team') {
     // team 指全员可见（演示简化：所有登录成员可见）
     return true
   }
-  // private：仅拥有者与协作成员可见（或通过共享链接获得权限）
+  // private：仅拥有者与协作成员可见（或持有效共享链接——已撤销/已过期不授权）
   if (doc.ownerId === userId) return true
   if (doc.editors && doc.editors.includes(userId)) return true
-  if (sharedPermission) return true
+  if (isShareActive(share)) return true
   return false
 }
 

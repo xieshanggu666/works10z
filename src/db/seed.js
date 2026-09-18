@@ -97,8 +97,8 @@ const seedComments = [
 ]
 
 const seedShares = [
-  { id: 'sh-1', docId: 'doc-1', token: 'share-abc123', permission: 'edit', createdBy: 'u-chen', expiresAt: null },
-  { id: 'sh-2', docId: 'doc-6', token: 'share-xyz789', permission: 'view', createdBy: 'u-admin', expiresAt: null }
+  { id: 'sh-1', docId: 'doc-1', token: 'share-abc123', permission: 'edit', createdBy: 'u-chen', createdAt: ago(2 * d), expiresAt: null, revokedAt: null },
+  { id: 'sh-2', docId: 'doc-6', token: 'share-xyz789', permission: 'view', createdBy: 'u-admin', createdAt: ago(5 * d), expiresAt: null, revokedAt: null }
 ]
 
 const seedFavorites = [
